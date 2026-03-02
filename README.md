@@ -1,191 +1,266 @@
-# 🕹️ Agentic Game Builder
+# 🎮 Agentic Game Builder (Dockerized AI System)
 
-An agentic AI system that takes a natural-language game idea and generates a fully playable browser game (`index.html`, `style.css`, `game.js`) through a structured multi-phase pipeline.
+An agentic AI system that takes a natural-language game idea and generates a **fully playable browser game** (`index.html`, `style.css`, `game.js`) through a structured multi-phase pipeline.
+
+The project is fully containerized using Docker and can be executed with a single command.
 
 ---
 
-## How to Run the Agent
+## 🚀 Overview
+
+This system implements a multi-agent architecture where specialized AI agents collaborate to transform a vague user idea into executable game code.
+
+Instead of using a single large prompt, reasoning is divided into structured phases:
+
+1. Clarification
+2. Planning
+3. Code Generation
+4. Validation
+5. File Output
+
+This makes the workflow transparent, deterministic, and easy to evaluate.
+
+---
+
+## ▶️ How to Run the Agent
 
 ### Prerequisites
-- Docker installed
-- An OpenAI API key
 
-### Docker Build & Run
+* Docker installed
+* OpenAI API Key
+
+---
+
+### 1. Clone the Repository
 
 ```bash
-# 1. Clone the repository
 git clone <repo-url>
 cd game-agent
+```
 
-# 2. Build the Docker image
+---
+
+### 2. Build Docker Image
+
+```bash
 docker build -t game-agent .
+```
 
-# 3. Run interactively (recommended)
+---
+
+### 3. Run Interactively (Recommended)
+
+```bash
 docker run -it \
   -e OPENAI_API_KEY=your_key_here \
   -v $(pwd)/output:/app/output \
   game-agent
+```
 
-# 4. Or pass game idea directly as argument
+The agent will ask clarification questions before generating the game.
+
+---
+
+### 4. Run With Direct Game Idea
+
+```bash
 docker run -it \
   -e OPENAI_API_KEY=your_key_here \
   -v $(pwd)/output:/app/output \
   game-agent "make a space shooter where I dodge asteroids"
 ```
 
-### After Running
+---
 
-Open `output/index.html` in your browser to play the generated game.
+### 🎮 After Running
 
-The agent also writes:
-- `output/requirements.json` — resolved requirements from the clarification phase
-- `output/plan.json` — the technical game plan from the planning phase
-- `output/index.html`, `output/style.css`, `output/game.js` — the playable game
+Open the generated file:
+
+```
+output/index.html
+```
+
+in your browser to play the game.
+
+Generated artifacts:
+
+* `output/requirements.json` — structured requirements from clarification
+* `output/plan.json` — technical game plan
+* `output/index.html` — playable game
+* `output/style.css`
+* `output/game.js`
 
 ---
 
-## Agent Architecture
+## 🧠 Agent Architecture
 
-The system is a **linear pipeline of specialized agents**, coordinated by a central Orchestrator. Each agent has a single responsibility, a dedicated system prompt, and communicates via typed Pydantic schemas — not raw text.
+The system follows a linear pipeline coordinated by a central **Orchestrator**.
 
 ```
 User Input
     │
     ▼
-┌─────────────────────────────────────────────────────┐
-│                    Orchestrator                      │
-│         (phase transitions + data routing)           │
-└──────┬──────────────────────────────────────────────┘
-       │
-       ▼
-┌─────────────────┐
-│ ClarifierAgent  │  Multi-turn Q&A loop. Dynamic stopping condition:
-│                 │  rule check → LLM completeness score → hard cap at 6 questions.
-│                 │  User can override anytime by saying "ready" / "go".
-└────────┬────────┘
-         │ RequirementsSchema (Pydantic)
-         │ → written to output/requirements.json
-         ▼
-┌─────────────────┐
-│  PlannerAgent   │  Reads structured requirements. Decides framework
-│                 │  (Phaser vs Vanilla JS) via heuristic rules.
-│                 │  Specifies all entities, systems, state machine.
-└────────┬────────┘
-         │ PlanSchema (Pydantic)
-         │ → written to output/plan.json
-         ▼
-┌─────────────────┐
-│   CoderAgent    │  Reads plan only (never raw chat). Generates all
-│                 │  three files. Runs a single self-review pass to
-│                 │  catch structural issues before writing.
-└────────┬────────┘
-         │ {index.html, style.css, game.js}
-         ▼
-┌─────────────────┐
-│ OutputValidator │  3-layer structural validation (Python only, no LLM):
-│                 │  Layer 1: file existence + size
-│                 │  Layer 2: syntax markers (DOCTYPE, script tags, etc)
-│                 │  Layer 3: coherence (framework used, states referenced)
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│   FileWriter    │  Writes all files to /app/output (Docker volume)
-└─────────────────┘
+Orchestrator
+    │
+    ├── ClarifierAgent
+    ├── PlannerAgent
+    ├── CoderAgent
+    ├── OutputValidator
+    └── FileWriter
 ```
 
-### Key Design Decisions
+### Orchestrator
 
-**Orchestrator as sole coordinator**: No agent imports another agent directly. All routing goes through `orchestrator.py`. This makes the control flow explicit and testable.
-
-**Typed JSON contracts**: Data between phases flows as Pydantic models (`RequirementsSchema`, `PlanSchema`), not raw strings or dicts. If the LLM returns malformed JSON, Pydantic catches it cleanly.
-
-**Prompt restructuring**: The ClarifierAgent converts the vague conversation into a structured `RequirementsSchema` before passing to the Planner. The Planner receives clean structured data, not chat history. The Coder receives a full plan, not requirements. Each stage gets the right level of abstraction.
-
-**Procedural assets only**: All game visuals are drawn with Canvas 2D API or Phaser Graphics — no external images, no CDN sprites, no placeholders. Games run fully offline (except Phaser itself, which is loaded from CDN only when chosen).
-
-**Framework decision is explicit**: The Planner writes `framework_reason` to `plan.json`, so the evaluator can see exactly why Phaser or Vanilla JS was chosen for a given game.
+Controls phase transitions and routes structured data between agents.
+Agents never communicate directly, keeping the system modular and testable.
 
 ---
 
-## Trade-offs Made
+### ClarifierAgent
 
-| Decision | Trade-off |
-|---|---|
-| Linear pipeline (no retry loop) | Simpler, more predictable — but if code generation fails, there's no automatic recovery. A retry loop was considered but rejected because LLM self-validation in a Docker environment without a browser has poor reliability. |
-| Single self-review pass in CoderAgent | Catches structural issues without risking infinite loops or compounding hallucinations from multiple passes. Deep semantic validation would require a real execution environment. |
-| Procedural canvas assets only | Games look like geometric prototypes, not polished games. The trade-off is zero external dependencies and guaranteed offline playability. |
-| Phaser loaded from CDN when chosen | Requires internet access for Phaser games. Trade-off accepted because bundling Phaser (~1MB) in the Docker image adds complexity without much benefit for an evaluation context. |
-| Python structural validation (no headless browser) | Can't catch runtime JavaScript errors. Only structural/coherence checks. The alternative — running Puppeteer or Playwright in Docker — adds significant build complexity. |
+* Multi-turn Q&A loop
+* Dynamic stopping condition:
 
----
+  * rule checks
+  * LLM completeness scoring
+  * hard cap at 6 questions
+* User override supported via keywords like **"ready"** or **"go"**
 
-## Improvements With More Time
-
-1. **Headless browser validation** — Run generated `index.html` in Playwright inside Docker, capture console errors, detect if the game loop actually starts. This is the single biggest improvement for reliability.
-
-2. **Retry loop with error feedback** — If validation fails, pass the specific errors back to CoderAgent as a follow-up message for targeted fixes, rather than full regeneration.
-
-3. **Streaming output** — Stream game.js generation to terminal so the user sees progress during what can be a 30-60 second generation step.
-
-4. **Game preview server** — Spin up a simple Python HTTP server inside Docker and print a `localhost:8080` URL so the user can play immediately without finding the output file.
-
-5. **Multi-level support** — Currently generates single-level games. Planner could design level progression and CoderAgent could implement level transitions.
-
-6. **Asset generation** — Integrate an image generation API to produce actual sprites instead of geometric shapes, embedded as base64 in game.js.
-
-7. **Conversation memory across sessions** — Save clarification conversations so returning users don't need to re-describe their game.
+Outputs a typed `RequirementsSchema`.
 
 ---
 
-## Project Structure
+### PlannerAgent
+
+* Consumes structured requirements
+* Chooses framework (Phaser vs Vanilla JS) using heuristics
+* Defines entities, systems, and state machine
+* Writes reasoning into `framework_reason` for transparency
+
+Outputs `PlanSchema`.
+
+---
+
+### CoderAgent
+
+* Reads only the technical plan (never chat history)
+* Generates all game files
+* Runs a single self-review pass to catch structural issues
+
+---
+
+### OutputValidator
+
+Python-based validation (no LLM):
+
+1. File existence and size checks
+2. Syntax markers (DOCTYPE, script tags, etc.)
+3. Cross-file coherence validation
+
+---
+
+### FileWriter
+
+Writes all outputs into `/app/output` using Docker volume mounting.
+
+---
+
+## 🏗 Key Design Decisions
+
+**Orchestrator as sole coordinator**
+All routing passes through the orchestrator for explicit control flow.
+
+**Typed JSON contracts**
+Agents communicate using Pydantic schemas instead of raw text, ensuring reliable structured outputs.
+
+**Abstraction separation**
+
+* Clarifier → structured requirements
+* Planner → technical architecture
+* Coder → implementation only
+
+Each stage receives only the information it needs.
+
+**Procedural assets only**
+Games use Canvas 2D or Phaser Graphics — no external sprites — ensuring offline playability.
+
+**Explicit framework decision**
+Planner records why Phaser or Vanilla JS was selected.
+
+---
+
+## ⚖️ Trade-offs Made
+
+| Decision                | Trade-off                                              |
+| ----------------------- | ------------------------------------------------------ |
+| Linear pipeline         | Predictable execution but no automatic recovery loop   |
+| Single self-review pass | Prevents infinite loops but limits deep semantic fixes |
+| Procedural graphics     | Reliable offline execution but less visual polish      |
+| Phaser via CDN          | Requires internet when Phaser is selected              |
+| Python validation only  | Cannot detect runtime JS errors                        |
+
+---
+
+## 🔧 Improvements With More Time
+
+* Headless browser validation using Playwright
+* Automatic retry loop with targeted error feedback
+* Streaming generation output
+* Built-in preview web server
+* Multi-level game support
+* AI-generated sprite assets
+* Persistent conversation memory across sessions
+
+---
+
+## 📁 Project Structure
 
 ```
 game-agent/
 ├── Dockerfile
 ├── README.md
 ├── requirements.txt
-├── main.py                      # Entry point
+├── main.py
 │
 ├── agent/
-│   ├── orchestrator.py          # Phase transitions, data routing
-│   ├── clarifier.py             # ClarifierAgent + system prompts
-│   ├── planner.py               # PlannerAgent + system prompts
-│   └── coder.py                 # CoderAgent + system prompts + self-review
+│   ├── orchestrator.py
+│   ├── clarifier.py
+│   ├── planner.py
+│   └── coder.py
 │
 ├── schemas/
-│   ├── requirements_schema.py   # Pydantic model: Clarifier → Planner contract
-│   └── plan_schema.py           # Pydantic model: Planner → Coder contract
+│   ├── requirements_schema.py
+│   └── plan_schema.py
 │
 ├── validators/
-│   └── output_validator.py      # 3-layer structural validation
+│   └── output_validator.py
 │
 ├── utils/
-│   ├── llm_client.py            # OpenAI wrapper (single place for all API calls)
-│   └── file_writer.py           # Writes output files + JSON artifacts
+│   ├── llm_client.py
+│   └── file_writer.py
 │
-└── output/                      # Generated game files land here (Docker volume)
-    ├── requirements.json
-    ├── plan.json
-    ├── index.html
-    ├── style.css
-    └── game.js
+└── output/
 ```
 
+---
 
+## 🧩 Additional Design Notes
 
+* Speed and difficulty preferences are captured during clarification and propagated through planning into generated gameplay logic.
+* CoderAgent uses generalized game-engine rules (tick-based motion, collision detection, input buffering).
+* Prompts were iteratively refined based on observed failure patterns across multiple game genres.
+* Architecture supports different models per phase (e.g., lightweight models for planning and stronger models for coding). For this submission, a single model prioritizes reliability.
+* Clarification logic evolved to better handle turn-based games (e.g., asking single-player vs two-player for Tic-Tac-Toe).
 
+---
 
+## ✅ Submission
 
+Repository contains:
 
+* Fully Dockerized agent
+* Reproducible execution
+* Structured multi-agent architecture
+* Generated playable output
 
-
-"speed/difficulty preference should be captured during clarification and flow through the plan into generated code."
-
-"CoderAgent prompt was strengthened with universal game-engine rules covering tick-based speed control, collision detection patterns, and input buffering — applicable to all game genres rather than game-specific instructions."
-
-"prompt was iteratively strengthened based on observed failure patterns across multiple game types."
-
-"The system is architected to support different models per phase — gpt-4o-mini for clarification/planning, gpt-4o for code generation. This would reduce cost by ~75% per run. For this submission both phases use gpt-4o to prioritize reliability, since a bad plan silently corrupts all downstream output. The model split is a one-line config change when cost optimization becomes the priority."
-
-"for tic tac toe games : Good learning for the clarifier — it should ask "single player vs computer or 2 players?" for turn-based games. Add this note mentally for the README.
+Run with one command and generate a game from natural language.
